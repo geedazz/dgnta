@@ -1,0 +1,91 @@
+name: Refresh Gemini File URIs
+
+on:
+  schedule:
+    # Kas 47 valandas: UTC 00:00 pirmadienį, antradienį ir pan.
+    # Tiksliau: paleidžiama kas ~2 dienas, bet su 47h buferiu
+    - cron: '0 0 * * *'   # kiekvieną dieną 00:00 UTC
+  workflow_dispatch:       # galima paleisti rankiniu būdu
+
+jobs:
+  upload-pdfs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Upload PDFs to Gemini and save URIs
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python3 << 'EOF'
+          import urllib.request
+          import json
+          import os
+          import time
+
+          API_KEY = os.environ["GEMINI_API_KEY"]
+
+          SOURCES = [
+            ("https://raw.githubusercontent.com/geedazz/dgnta/main/Administratoriaus%20skyrimo%20atsaukimo%20aprasas.pdf", "Administratoriaus skyrimo atsaukimo aprasas"),
+            ("https://raw.githubusercontent.com/geedazz/dgnta/main/Administravimo%20nuostatai.pdf", "Administravimo nuostatai"),
+            ("https://raw.githubusercontent.com/geedazz/dgnta/main/Balsavimo%20rastu%20tvarkos%20aprasas.pdf", "Balsavimo rastu tvarkos aprasas"),
+            ("https://raw.githubusercontent.com/geedazz/dgnta/main/CK4%20knyga.pdf", "CK IV knyga"),
+            ("https://raw.githubusercontent.com/geedazz/dgnta/main/Kaupiamuju%20tvarkos%20aprasas.pdf", "Kaupiamuju tvarkos aprasas"),
+            ("https://raw.githubusercontent.com/geedazz/dgnta/main/Pirkimu%20tvarkos%20aprasas.pdf", "Pirkimu tvarkos aprasas"),
+            ("https://raw.githubusercontent.com/geedazz/dgnta/main/Sildymo%20karsto%20vandens%20sistemu%20prieziuros%20tvarkos%20aprasas.pdf", "Sildymo KV prieziuros tvarkos aprasas"),
+            ("https://raw.githubusercontent.com/geedazz/dgnta/main/Sildymo%20karsto%20vandens%20sistemu%20privalomieji%20reikalavimai.pdf", "Sildymo KV privalomieji reikalavimai"),
+            ("https://raw.githubusercontent.com/geedazz/dgnta/main/Sildymo%20karsto%20vandens%20sistemu%20tarifo%20metodika.pdf", "Sildymo KV tarifo metodika"),
+            ("https://raw.githubusercontent.com/geedazz/dgnta/main/Silumos%20tiekimo%20vartojimo%20taisykles.pdf", "Silumos tiekimo ir vartojimo taisykles"),
+            ("https://raw.githubusercontent.com/geedazz/dgnta/main/Silumos%20ukio%20istatymas.pdf", "Silumos ukio istatymas"),
+            ("https://raw.githubusercontent.com/geedazz/dgnta/main/STR%20technine%20prieziura.pdf", "STR technine prieziura"),
+            ("https://raw.githubusercontent.com/geedazz/dgnta/main/Susirinkimu%20saukimo%20ir%20informavimo%20apie%20sprendimus%20aprasas.pdf", "Susirinkimu saukimo aprasas"),
+            ("https://raw.githubusercontent.com/geedazz/dgnta/main/Technines%20prieziuros%20tarifo%20metodika.pdf", "Technines prieziuros tarifo metodika"),
+          ]
+
+          uris = []
+
+          for url, name in SOURCES:
+            print(f"Uploading: {name}")
+            
+            # Atsisiųsti PDF
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req) as r:
+              pdf_bytes = r.read()
+            
+            # Įkelti į Gemini Files API
+            upload_url = f"https://generativelanguage.googleapis.com/upload/v1beta/files?key={API_KEY}"
+            upload_req = urllib.request.Request(
+              upload_url,
+              data=pdf_bytes,
+              method="POST",
+              headers={
+                "Content-Type": "application/pdf",
+                "X-Goog-Upload-Command": "start, upload, finalize",
+                "X-Goog-Upload-Header-Content-Length": str(len(pdf_bytes)),
+                "X-Goog-Upload-Header-Content-Type": "application/pdf",
+              }
+            )
+            with urllib.request.urlopen(upload_req) as r:
+              data = json.loads(r.read())
+            
+            uri = data["file"]["uri"]
+            uris.append({"name": name, "uri": uri})
+            print(f"  OK: {uri}")
+            time.sleep(0.5)  # nedidelis pauzė tarp užklausų
+
+          # Išsaugoti rezultatą
+          with open("file_uris.json", "w", encoding="utf-8") as f:
+            json.dump({"generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "uris": uris}, f, ensure_ascii=False, indent=2)
+
+          print(f"\nSėkmingai įkelta {len(uris)} failų.")
+          EOF
+
+      - name: Commit and push file_uris.json
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add file_uris.json
+          git diff --staged --quiet || git commit -m "chore: refresh Gemini file URIs [skip ci]"
+          git push
